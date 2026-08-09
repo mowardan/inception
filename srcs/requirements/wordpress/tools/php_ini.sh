@@ -2,7 +2,7 @@
 
 echo "Waiting for MariaDB to be ready..."
 until mariadb-admin ping -h mariadb --user=$MYSQL_USER --password=$MYSQL_PASSWORD --silent; do 
-    sleep 2
+    sleep 1
 done
 
 if [ ! -f /var/www/html/wp-config.php ]; then
