@@ -23,29 +23,30 @@ jobs:
         working-directory: srcs
 
     steps:
-
       # ==========================================
-      # 1. Checkout
+      # 1. Checkout repository
       # ==========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
       # ==========================================
-      # 2. Docker information
+      # 2. Check Docker
       # ==========================================
       - name: Check Docker
         run: |
           docker --version
           docker compose version
 
-
       # ==========================================
       # 3. Create CI environment
       # ==========================================
       - name: Create CI environment
         run: |
+          mkdir -p /tmp/inception-data/mariadb
+          mkdir -p /tmp/inception-data/wordpress
+
           cat > .env <<'EOF'
+          DATA_PATH=/tmp/inception-data
           MYSQL_DATABASE=wordpress
           MYSQL_USER=wpuser
           MYSQL_PASSWORD=testpassword
@@ -53,44 +54,42 @@ jobs:
           DOMAIN_NAME=localhost
           EOF
 
-          echo "CI .env created"
-
+          echo "CI environment created"
 
       # ==========================================
-      # 4. Create CI volume directories
+      # 4. Verify environment
       # ==========================================
-      - name: Create volume directories
+      - name: Verify environment
         run: |
-          sudo mkdir -p /home/vboxuser/data/mariadb
-          sudo mkdir -p /home/vboxuser/data/wordpress
+          echo "DATA_PATH:"
+          grep '^DATA_PATH=' .env
 
-          sudo chmod 777 /home/vboxuser/data/mariadb
-          sudo chmod 777 /home/vboxuser/data/wordpress
+          echo "Checking directories:"
+          test -d /tmp/inception-data/mariadb
+          test -d /tmp/inception-data/wordpress
 
+          echo "Directories OK"
 
       # ==========================================
-      # 5. Validate Compose
+      # 5. Validate Docker Compose
       # ==========================================
       - name: Validate Docker Compose
         run: |
           docker compose config
 
-
       # ==========================================
-      # 6. Build images
+      # 6. Build Docker images
       # ==========================================
       - name: Build Docker images
         run: |
           docker compose build --no-cache
 
-
       # ==========================================
-      # 7. Start containers
+      # 7. Start Inception
       # ==========================================
       - name: Start Inception
         run: |
           docker compose up -d
-
 
       # ==========================================
       # 8. Show containers
@@ -99,7 +98,6 @@ jobs:
         run: |
           docker compose ps
 
-
       # ==========================================
       # 9. Wait for MariaDB
       # ==========================================
@@ -107,8 +105,7 @@ jobs:
         run: |
           echo "Waiting for MariaDB..."
 
-          for i in {1..30}; do
-
+          for i in {1..60}; do
             if docker compose exec -T mariadb \
               mariadb-admin ping \
               -h localhost \
@@ -118,17 +115,15 @@ jobs:
 
               echo "MariaDB is ready!"
               exit 0
-
             fi
 
-            echo "MariaDB not ready yet..."
+            echo "MariaDB is not ready yet..."
             sleep 2
-
           done
 
           echo "MariaDB failed to start"
+          docker compose logs mariadb
           exit 1
-
 
       # ==========================================
       # 10. Test MariaDB
@@ -142,7 +137,6 @@ jobs:
             -e "SHOW DATABASES;"
 
           echo "MariaDB test passed"
-
 
       # ==========================================
       # 11. Test WordPress
@@ -162,7 +156,6 @@ jobs:
 
           echo "WordPress files are OK"
 
-
       # ==========================================
       # 12. Test WordPress -> MariaDB
       # ==========================================
@@ -173,7 +166,6 @@ jobs:
 
           echo "WordPress can resolve MariaDB"
 
-
       # ==========================================
       # 13. Test NGINX configuration
       # ==========================================
@@ -183,16 +175,37 @@ jobs:
 
           echo "NGINX configuration is valid"
 
-
       # ==========================================
-      # 14. Test HTTPS
+      # 14. Wait for HTTPS
       # ==========================================
-      - name: Test HTTPS
+      - name: Wait for HTTPS
         run: |
-          echo "Testing HTTPS..."
+          echo "Waiting for HTTPS..."
 
-          sleep 5
+          for i in {1..30}; do
+            if curl \
+              --fail \
+              --insecure \
+              --silent \
+              --show-error \
+              https://localhost/ > /dev/null; then
 
+              echo "HTTPS is working!"
+              exit 0
+            fi
+
+            echo "NGINX is not ready yet..."
+            sleep 2
+          done
+
+          echo "HTTPS failed"
+          exit 1
+
+      # ==========================================
+      # 15. Test HTTPS response
+      # ==========================================
+      - name: Test HTTPS response
+        run: |
           curl \
             --fail \
             --insecure \
@@ -201,11 +214,10 @@ jobs:
             https://localhost/
 
           echo
-          echo "HTTPS is working!"
-
+          echo "HTTPS test passed"
 
       # ==========================================
-      # 15. Check all containers
+      # 16. Check containers
       # ==========================================
       - name: Check containers
         run: |
@@ -218,33 +230,30 @@ jobs:
 
           echo "All containers are running"
 
-
       # ==========================================
-      # 16. Show logs if CI fails
+      # 17. Show logs if something fails
       # ==========================================
       - name: Show logs on failure
         if: failure()
         run: |
-          echo "================================"
-          echo "CONTAINERS"
-          echo "================================"
+          echo "======================================"
+          echo "DOCKER COMPOSE PS"
+          echo "======================================"
 
           docker compose ps
 
           echo
-          echo "================================"
-          echo "LOGS"
-          echo "================================"
+          echo "======================================"
+          echo "DOCKER COMPOSE LOGS"
+          echo "======================================"
 
           docker compose logs --no-color
 
-
       # ==========================================
-      # 17. Cleanup
+      # 18. Cleanup
       # ==========================================
       - name: Cleanup
         if: always()
         run: |
-          docker compose down -v --remove-orphans
-
-          docker system prune -af
+          docker compose down -v --remove-orphans || true
+          docker system prune -af || true
