@@ -1,7 +1,7 @@
 services:
   mariadb:
     build: requirements/mariadb
-    image: mariadb:img 
+    image: mariadb:img
     container_name: mariadb
     restart: always
     env_file:
@@ -10,7 +10,7 @@ services:
       - inception
     volumes:
       - mariadb_data:/var/lib/mysql
-  
+
   wordpress:
     build: requirements/wordpress
     image: wordpress:img
@@ -30,14 +30,14 @@ services:
     image: nginx:img
     container_name: nginx
     restart: always
-    ports:
-      - 443:443
     depends_on:
       - wordpress
     networks:
       - inception
     volumes:
       - wordpress_data:/var/www/html
+    ports:
+      - "443:443"
 
 volumes:
   mariadb_data:
@@ -45,12 +45,12 @@ volumes:
       type: none
       o: bind
       device: ${DATA_PATH}/mariadb
+
   wordpress_data:
     driver_opts:
       type: none
       o: bind
       device: ${DATA_PATH}/wordpress
-
 
 networks:
   inception:

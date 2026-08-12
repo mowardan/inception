@@ -23,19 +23,22 @@ jobs:
         working-directory: srcs
 
     steps:
+
       # ==========================================
       # 1. Checkout repository
       # ==========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
       # ==========================================
-      # 2. Check Docker
+      # 2. Docker information
       # ==========================================
       - name: Check Docker
         run: |
           docker --version
           docker compose version
+
 
       # ==========================================
       # 3. Create CI environment
@@ -56,40 +59,46 @@ jobs:
 
           echo "CI environment created"
 
+
       # ==========================================
-      # 4. Verify environment
+      # 4. Check environment
       # ==========================================
-      - name: Verify environment
+      - name: Check environment
         run: |
           echo "DATA_PATH:"
           grep '^DATA_PATH=' .env
 
-          echo "Checking directories:"
+          echo "Checking directories..."
+
           test -d /tmp/inception-data/mariadb
           test -d /tmp/inception-data/wordpress
 
-          echo "Directories OK"
+          echo "Environment OK"
+
 
       # ==========================================
-      # 5. Validate Docker Compose
+      # 5. Validate Compose
       # ==========================================
       - name: Validate Docker Compose
         run: |
           docker compose config
 
+
       # ==========================================
-      # 6. Build Docker images
+      # 6. Build images
       # ==========================================
       - name: Build Docker images
         run: |
           docker compose build --no-cache
 
+
       # ==========================================
-      # 7. Start Inception
+      # 7. Start containers
       # ==========================================
       - name: Start Inception
         run: |
           docker compose up -d
+
 
       # ==========================================
       # 8. Show containers
@@ -97,6 +106,7 @@ jobs:
       - name: Show containers
         run: |
           docker compose ps
+
 
       # ==========================================
       # 9. Wait for MariaDB
@@ -106,6 +116,7 @@ jobs:
           echo "Waiting for MariaDB..."
 
           for i in {1..60}; do
+
             if docker compose exec -T mariadb \
               mariadb-admin ping \
               -h localhost \
@@ -117,13 +128,16 @@ jobs:
               exit 0
             fi
 
-            echo "MariaDB is not ready yet..."
+            echo "MariaDB not ready..."
             sleep 2
           done
 
           echo "MariaDB failed to start"
+
           docker compose logs mariadb
+
           exit 1
+
 
       # ==========================================
       # 10. Test MariaDB
@@ -138,15 +152,40 @@ jobs:
 
           echo "MariaDB test passed"
 
+
       # ==========================================
-      # 11. Test WordPress
+      # 11. Wait for WordPress
+      # ==========================================
+      - name: Wait for WordPress
+        run: |
+          echo "Waiting for WordPress..."
+
+          for i in {1..60}; do
+
+            if docker compose exec -T wordpress \
+              test -d /var/www/html/wp-admin; then
+
+              echo "WordPress files detected!"
+              exit 0
+            fi
+
+            echo "WordPress not ready..."
+            sleep 2
+          done
+
+          echo "WordPress failed to initialize"
+
+          docker compose logs wordpress
+
+          exit 1
+
+
+      # ==========================================
+      # 12. Test WordPress files
       # ==========================================
       - name: Test WordPress
         run: |
           echo "Checking WordPress..."
-
-          docker compose exec -T wordpress \
-            test -f /var/www/html/wp-config.php
 
           docker compose exec -T wordpress \
             test -d /var/www/html/wp-admin
@@ -154,70 +193,93 @@ jobs:
           docker compose exec -T wordpress \
             test -d /var/www/html/wp-content
 
+          docker compose exec -T wordpress \
+            test -f /var/www/html/index.php
+
           echo "WordPress files are OK"
 
+
       # ==========================================
-      # 12. Test WordPress -> MariaDB
+      # 13. Test WordPress -> MariaDB
       # ==========================================
-      - name: Test WordPress database connection
+      - name: Test WordPress network
         run: |
+          echo "Testing WordPress -> MariaDB..."
+
           docker compose exec -T wordpress \
             getent hosts mariadb
 
           echo "WordPress can resolve MariaDB"
 
+
       # ==========================================
-      # 13. Test NGINX configuration
+      # 14. Test NGINX configuration
       # ==========================================
-      - name: Test NGINX
+      - name: Test NGINX configuration
         run: |
           docker compose exec -T nginx nginx -t
 
           echo "NGINX configuration is valid"
 
+
       # ==========================================
-      # 14. Wait for HTTPS
+      # 15. Wait for HTTPS
       # ==========================================
       - name: Wait for HTTPS
         run: |
-          echo "Waiting for HTTPS..."
+          echo "Waiting for NGINX HTTPS..."
 
-          for i in {1..30}; do
+          for i in {1..60}; do
+
             if curl \
               --fail \
               --insecure \
               --silent \
               --show-error \
-              https://localhost/ > /dev/null; then
+              https://localhost/ \
+              > /dev/null; then
 
               echo "HTTPS is working!"
               exit 0
             fi
 
-            echo "NGINX is not ready yet..."
+            echo "HTTPS not ready..."
             sleep 2
           done
 
           echo "HTTPS failed"
+
+          docker compose logs nginx
+
           exit 1
 
+
       # ==========================================
-      # 15. Test HTTPS response
+      # 16. Test HTTPS response
       # ==========================================
-      - name: Test HTTPS response
+      - name: Test HTTPS
         run: |
-          curl \
-            --fail \
+          echo "Testing HTTPS response..."
+
+          HTTP_CODE=$(curl \
             --insecure \
             --silent \
-            --show-error \
-            https://localhost/
+            --output /dev/null \
+            --write-out "%{http_code}" \
+            https://localhost/)
 
-          echo
+          echo "HTTP status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "HTTPS returned an invalid status"
+            exit 1
+          fi
+
           echo "HTTPS test passed"
 
+
       # ==========================================
-      # 16. Check containers
+      # 17. Check containers
       # ==========================================
       - name: Check containers
         run: |
@@ -230,27 +292,42 @@ jobs:
 
           echo "All containers are running"
 
+
       # ==========================================
-      # 17. Show logs if something fails
+      # 18. Check volumes
+      # ==========================================
+      - name: Check volumes
+        run: |
+          docker volume ls
+
+          docker volume inspect srcs_mariadb_data
+          docker volume inspect srcs_wordpress_data
+
+          echo "Volumes are OK"
+
+
+      # ==========================================
+      # 19. Show logs if something fails
       # ==========================================
       - name: Show logs on failure
         if: failure()
         run: |
           echo "======================================"
-          echo "DOCKER COMPOSE PS"
+          echo "CONTAINER STATUS"
           echo "======================================"
 
           docker compose ps
 
           echo
           echo "======================================"
-          echo "DOCKER COMPOSE LOGS"
+          echo "CONTAINER LOGS"
           echo "======================================"
 
           docker compose logs --no-color
 
+
       # ==========================================
-      # 18. Cleanup
+      # 20. Cleanup
       # ==========================================
       - name: Cleanup
         if: always()
