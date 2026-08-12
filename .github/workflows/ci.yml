@@ -1,0 +1,250 @@
+name: Inception CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+jobs:
+  inception:
+    name: Build and test Inception
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: srcs
+
+    steps:
+
+      # ==========================================
+      # 1. Checkout
+      # ==========================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # ==========================================
+      # 2. Docker information
+      # ==========================================
+      - name: Check Docker
+        run: |
+          docker --version
+          docker compose version
+
+
+      # ==========================================
+      # 3. Create CI environment
+      # ==========================================
+      - name: Create CI environment
+        run: |
+          cat > .env <<'EOF'
+          MYSQL_DATABASE=wordpress
+          MYSQL_USER=wpuser
+          MYSQL_PASSWORD=testpassword
+          MYSQL_ROOT_PASSWORD=testrootpassword
+          DOMAIN_NAME=localhost
+          EOF
+
+          echo "CI .env created"
+
+
+      # ==========================================
+      # 4. Create CI volume directories
+      # ==========================================
+      - name: Create volume directories
+        run: |
+          sudo mkdir -p /home/vboxuser/data/mariadb
+          sudo mkdir -p /home/vboxuser/data/wordpress
+
+          sudo chmod 777 /home/vboxuser/data/mariadb
+          sudo chmod 777 /home/vboxuser/data/wordpress
+
+
+      # ==========================================
+      # 5. Validate Compose
+      # ==========================================
+      - name: Validate Docker Compose
+        run: |
+          docker compose config
+
+
+      # ==========================================
+      # 6. Build images
+      # ==========================================
+      - name: Build Docker images
+        run: |
+          docker compose build --no-cache
+
+
+      # ==========================================
+      # 7. Start containers
+      # ==========================================
+      - name: Start Inception
+        run: |
+          docker compose up -d
+
+
+      # ==========================================
+      # 8. Show containers
+      # ==========================================
+      - name: Show containers
+        run: |
+          docker compose ps
+
+
+      # ==========================================
+      # 9. Wait for MariaDB
+      # ==========================================
+      - name: Wait for MariaDB
+        run: |
+          echo "Waiting for MariaDB..."
+
+          for i in {1..30}; do
+
+            if docker compose exec -T mariadb \
+              mariadb-admin ping \
+              -h localhost \
+              -u root \
+              -ptestrootpassword \
+              --silent; then
+
+              echo "MariaDB is ready!"
+              exit 0
+
+            fi
+
+            echo "MariaDB not ready yet..."
+            sleep 2
+
+          done
+
+          echo "MariaDB failed to start"
+          exit 1
+
+
+      # ==========================================
+      # 10. Test MariaDB
+      # ==========================================
+      - name: Test MariaDB
+        run: |
+          docker compose exec -T mariadb \
+            mariadb \
+            -u root \
+            -ptestrootpassword \
+            -e "SHOW DATABASES;"
+
+          echo "MariaDB test passed"
+
+
+      # ==========================================
+      # 11. Test WordPress
+      # ==========================================
+      - name: Test WordPress
+        run: |
+          echo "Checking WordPress..."
+
+          docker compose exec -T wordpress \
+            test -f /var/www/html/wp-config.php
+
+          docker compose exec -T wordpress \
+            test -d /var/www/html/wp-admin
+
+          docker compose exec -T wordpress \
+            test -d /var/www/html/wp-content
+
+          echo "WordPress files are OK"
+
+
+      # ==========================================
+      # 12. Test WordPress -> MariaDB
+      # ==========================================
+      - name: Test WordPress database connection
+        run: |
+          docker compose exec -T wordpress \
+            getent hosts mariadb
+
+          echo "WordPress can resolve MariaDB"
+
+
+      # ==========================================
+      # 13. Test NGINX configuration
+      # ==========================================
+      - name: Test NGINX
+        run: |
+          docker compose exec -T nginx nginx -t
+
+          echo "NGINX configuration is valid"
+
+
+      # ==========================================
+      # 14. Test HTTPS
+      # ==========================================
+      - name: Test HTTPS
+        run: |
+          echo "Testing HTTPS..."
+
+          sleep 5
+
+          curl \
+            --fail \
+            --insecure \
+            --silent \
+            --show-error \
+            https://localhost/
+
+          echo
+          echo "HTTPS is working!"
+
+
+      # ==========================================
+      # 15. Check all containers
+      # ==========================================
+      - name: Check containers
+        run: |
+          docker compose ps
+
+          if docker compose ps | grep -Ei "Exit|Dead"; then
+            echo "A container has stopped!"
+            exit 1
+          fi
+
+          echo "All containers are running"
+
+
+      # ==========================================
+      # 16. Show logs if CI fails
+      # ==========================================
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "================================"
+          echo "CONTAINERS"
+          echo "================================"
+
+          docker compose ps
+
+          echo
+          echo "================================"
+          echo "LOGS"
+          echo "================================"
+
+          docker compose logs --no-color
+
+
+      # ==========================================
+      # 17. Cleanup
+      # ==========================================
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+
+          docker system prune -af
